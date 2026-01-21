@@ -1,6 +1,6 @@
 """
 uploader.py - Загрузка YouTube Shorts
-ТОЧНАЯ КОПИЯ запуска браузера из manager.py
+ПОЛНАЯ ВЕРСИЯ с одноразовой навигацией и закрытием диалогов
 """
 
 import asyncio
@@ -94,19 +94,12 @@ class VideoUploader:
         await asyncio.sleep(delay)
         await page.close()
 
-    async def upload_video(
-            self,
-            page: Page,
-            video_path: Path,
-            profile_name: str,
-            title: str = "Крутое видео #shorts",
-            description: str = "Смотри это видео! #shorts #viral",
-            visibility: str = "public"
-    ):
-        """Загрузить одно видео на YouTube"""
+    async def navigate_to_studio(self, page: Page, profile_name: str) -> Page:
+        """
+        Навигация в YouTube Studio (ОДИН РАЗ в начале сессии)
+        Возвращает новую страницу Studio
+        """
         try:
-            logger.info(f"[{profile_name}] 📤 Загружаю: {video_path.name}")
-
             # ШАГ 1: Google
             logger.info(f"[{profile_name}] 🔍 Открываю Google...")
             await page.goto('https://www.google.com', timeout=30000)
@@ -126,7 +119,7 @@ class VideoUploader:
             await asyncio.sleep(random.uniform(2, 4))
 
             # ШАГ 3: Переходим на YouTube
-            logger.info(f"[{profile_name}] 🖱 Перехожу на YouTube...")
+            logger.info(f"[{profile_name}] 🖱️ Перехожу на YouTube...")
             try:
                 youtube_link = page.locator('a[href*="youtube.com"]').first
                 await youtube_link.click()
@@ -135,70 +128,88 @@ class VideoUploader:
                 await page.goto('https://www.youtube.com', timeout=30000)
                 await asyncio.sleep(random.uniform(2, 4))
 
-            # ШАГ 4: Кликаем на кнопку профиля (аватарку)
+            # ШАГ 4: Кликаем на кнопку профиля
             logger.info(f"[{profile_name}] 👤 Открываю меню профиля...")
-            try:
-                avatar_button = page.locator(
-                    'button#avatar-btn, button[aria-label*="Меню аккаунта"], button[aria-label*="Account menu"]').first
-                await avatar_button.click(timeout=5000)
-                await asyncio.sleep(random.uniform(1, 2))
-            except Exception as e:
-                logger.warning(f"[{profile_name}] ⚠️ Не нашел кнопку профиля: {e}")
-            # ШАГ 5: Выбираем YouTube Studio
-            logger.info(f"[{profile_name}] 🎬 Выбираю YouTube Studio...")
-            try:
-                studio_link = page.locator(
-                    'tp-yt-paper-item:has-text("Творческая студия"), tp-yt-paper-item:has-text("YouTube Studio"), a:has-text("YouTube Studio")').first
+            avatar_button = page.locator(
+                'button#avatar-btn, button[aria-label*="Меню аккаунта"], button[aria-label*="Account menu"]').first
+            await avatar_button.click(timeout=10000)
+            await asyncio.sleep(random.uniform(1, 2))
 
-                # Ждем новую страницу (открывается в новой вкладке)
-                async with page.context.expect_page() as new_page_info:
+            # ШАГ 5: YouTube Studio (может открыться в новой вкладке или той же)
+            logger.info(f"[{profile_name}] 🎬 Выбираю YouTube Studio...")
+            studio_link = page.locator(
+                'tp-yt-paper-item:has-text("Творческая студия"), tp-yt-paper-item:has-text("YouTube Studio"), a:has-text("YouTube Studio")').first
+
+            # Пробуем ждать новую вкладку (timeout 5 сек)
+            studio_page = None
+            try:
+                async with page.context.expect_page(timeout=5000) as new_page_info:
                     await studio_link.click(timeout=5000)
 
-                # Переключаемся на новую страницу YouTube Studio
-                new_page = await new_page_info.value
-                await new_page.wait_for_load_state('networkidle')
-                page = new_page  # Теперь работаем со Studio!
-
-                logger.info(f"[{profile_name}] ✅ Переключился на YouTube Studio")
-                await asyncio.sleep(random.uniform(3, 5))
+                # Новая вкладка открылась!
+                studio_page = await new_page_info.value
+                logger.info(f"[{profile_name}] ✅ Открылась новая вкладка Studio")
 
             except Exception as e:
-                logger.warning(f"[{profile_name}] ⚠️ Не нашел YouTube Studio: {e}")
-                await page.goto('https://studio.youtube.com', timeout=30000)
-                await asyncio.sleep(random.uniform(3, 5))
-            # ШАГ 6: Нажимаем Continue (если есть)
+                # Новая вкладка НЕ открылась - значит переход в той же вкладке
+                logger.info(f"[{profile_name}] ℹ️ Studio открылся в той же вкладке")
+                studio_page = page
+
+            # Ждем загрузку
+            await studio_page.wait_for_load_state('networkidle', timeout=30000)
+            logger.info(f"[{profile_name}] ✅ YouTube Studio загружен")
+            await asyncio.sleep(random.uniform(3, 5))
+
+            # ШАГ 6: Continue (если есть)
             logger.info(f"[{profile_name}] ➡️ Проверяю всплывающее окно...")
             try:
-                continue_button = page.locator(
+                continue_button = studio_page.locator(
                     'button[aria-label*="Continue"], button[aria-label*="Продолжить"], ytcp-button-shape button:has-text("Continue"), ytcp-button-shape button:has-text("Продолжить")').first
                 await continue_button.click(timeout=3000)
                 await asyncio.sleep(random.uniform(1, 2))
                 logger.info(f"[{profile_name}] ✅ Нажал Continue")
             except:
                 logger.info(f"[{profile_name}] ℹ️ Всплывающее окно не найдено")
+
+            return studio_page
+
+        except Exception as e:
+            logger.error(f"[{profile_name}] ❌ Ошибка навигации: {e}")
+            raise
+
+    async def upload_video(
+            self,
+            page: Page,
+            video_path: Path,
+            profile_name: str,
+            title: str = "Крутое видео #shorts",
+            description: str = "Смотри это видео! #shorts #viral",
+            visibility: str = "public"
+    ):
+        """Загрузить одно видео (уже в Studio!)"""
+        try:
+            logger.info(f"[{profile_name}] 📤 Загружаю: {video_path.name}")
+
             # ШАГ 7: Переходим в раздел Контент
             logger.info(f"[{profile_name}] 📂 Перехожу в раздел Контент...")
             try:
-                content_icon = page.locator('yt-icon span.yt-icon-shape:has(svg path[d*="M20 2H8"])').first
-                await content_icon.click(timeout=5000)
+                content_button = page.locator(
+                    'tp-yt-paper-icon-item.videos, tp-yt-paper-icon-item:has-text("Content"), tp-yt-paper-icon-item:has-text("Контент")').first
+                await content_button.click(timeout=5000)
                 await asyncio.sleep(random.uniform(2, 3))
             except Exception as e:
                 logger.warning(f"[{profile_name}] ⚠️ Не нашел раздел Контент: {e}")
-                try:
-                    content_link = page.locator('a:has-text("Контент"), a:has-text("Content")').first
-                    await content_link.click(timeout=3000)
-                    await asyncio.sleep(random.uniform(2, 3))
-                except:
-                    pass
-            # ШАГ 8: Нажимаем Добавить видео
-            logger.info(f"[{profile_name}] ➕ Нажимаю 'Добавить видео'...")
+
+            # ШАГ 8: Нажимаем Upload videos / Добавить видео
+            logger.info(f"[{profile_name}] ➕ Нажимаю 'Upload videos'...")
             try:
                 upload_button = page.locator(
-                    'button[aria-label*="Добавить видео"], button[aria-label*="Upload"], ytcp-button-shape button:has-text("Добавить видео"), ytcp-button-shape button:has-text("Upload")').first
+                    'button[aria-label="Upload videos"], button[aria-label="Добавить видео"], ytcp-button-shape button:has-text("Upload videos"), ytcp-button-shape button:has-text("Добавить видео")').first
                 await upload_button.click(timeout=5000)
                 await asyncio.sleep(random.uniform(2, 3))
             except Exception as e:
                 logger.warning(f"[{profile_name}] ⚠️ Не нашел кнопку загрузки: {e}")
+
             # ШАГ 9: Загружаем файл
             logger.info(f"[{profile_name}] 📁 Выбираю файл...")
             try:
@@ -210,10 +221,11 @@ class VideoUploader:
                 logger.error(f"[{profile_name}] ❌ Не удалось загрузить файл: {e}")
                 return False
 
-            # ШАГ 8: Title
+            # ШАГ 10: Title
             logger.info(f"[{profile_name}] ✍️ Название...")
             try:
-                title_input = page.locator('div[aria-label*="название"], div[aria-label*="title"]').first
+                title_input = page.locator(
+                    'div[aria-label*="название"], div[aria-label*="title"], div[aria-label*="Title"]').first
                 await title_input.click(timeout=3000)
                 await asyncio.sleep(0.5)
                 await page.keyboard.press('Control+A')
@@ -226,21 +238,36 @@ class VideoUploader:
 
             await asyncio.sleep(random.uniform(1, 2))
 
-            # ШАГ 9: Description
+            # ШАГ 11: Description
             logger.info(f"[{profile_name}] ✍️ Описание...")
             try:
-                desc_input = page.locator('div[aria-label*="описание"], div[aria-label*="description"]').first
-                await desc_input.click(timeout=3000)
+                # Сначала закрываем dropdown от названия (если открыт)
+                await page.keyboard.press('Escape')
                 await asyncio.sleep(0.5)
+
+                # Кликаем на поле описания
+                desc_input = page.locator(
+                    'ytcp-social-suggestions-textbox#description-textarea div#textbox[contenteditable="true"]').first
+                await desc_input.click(timeout=5000, force=True)  # force=True игнорирует перекрытие
+                await asyncio.sleep(0.5)
+
+                # Очищаем
+                await page.keyboard.press('Control+A')
+                await page.keyboard.press('Backspace')
+                await asyncio.sleep(0.3)
+
+                # Вводим описание
                 for char in description:
                     await page.keyboard.type(char)
                     await asyncio.sleep(random.uniform(0.05, 0.15))
+
+                logger.info(f"[{profile_name}] ✅ Описание добавлено")
             except Exception as e:
                 logger.warning(f"[{profile_name}] ⚠️ Описание: {e}")
 
             await asyncio.sleep(random.uniform(1, 2))
 
-            # ШАГ 10: Not for kids
+            # ШАГ 12: Not for kids
             logger.info(f"[{profile_name}] 🔞 Не для детей...")
             try:
                 not_for_kids = page.locator('tp-yt-paper-radio-button[name="VIDEO_MADE_FOR_KIDS_NOT_MFK"]').first
@@ -249,7 +276,7 @@ class VideoUploader:
             except Exception as e:
                 logger.warning(f"[{profile_name}] ⚠️ Не для детей: {e}")
 
-            # ШАГ 11: Next 3 times
+            # ШАГ 13: Next 3 times
             for i in range(3):
                 logger.info(f"[{profile_name}] ⏭️ Далее ({i + 1}/3)...")
                 try:
@@ -259,8 +286,8 @@ class VideoUploader:
                 except Exception as e:
                     logger.warning(f"[{profile_name}] ⚠️ Далее {i + 1}: {e}")
 
-            # ШАГ 12: Visibility
-            logger.info(f"[{profile_name}] 👁 Видимость: {visibility}...")
+            # ШАГ 14: Visibility
+            logger.info(f"[{profile_name}] 👁️ Видимость: {visibility}...")
             try:
                 if visibility.lower() == "public":
                     vis_radio = page.locator('tp-yt-paper-radio-button[name="PUBLIC"]').first
@@ -273,20 +300,41 @@ class VideoUploader:
             except Exception as e:
                 logger.warning(f"[{profile_name}] ⚠️ Видимость: {e}")
 
-            # ШАГ 13: Publish
+            # ШАГ 15: Publish
             logger.info(f"[{profile_name}] 🚀 Публикую...")
             try:
                 publish_button = page.locator('button:has-text("Опубликовать"), button:has-text("Publish")').first
                 await publish_button.click(timeout=5000)
-                await asyncio.sleep(random.uniform(3, 5))
-                logger.info(f"[{profile_name}] ✅ Видео загружено!")
+
+                logger.info(f"[{profile_name}] ⏳ Жду обработки видео...")
+
+                # Ждем обработку (30-60 секунд)
+                await asyncio.sleep(random.uniform(30, 60))
+
+                # Закрываем диалог через JS клик (обходит visibility)
+                logger.info(f"[{profile_name}] ✖️ Закрываю диалог...")
+                try:
+                    # Находим кнопку
+                    close_button = page.locator(
+                        'ytcp-button-shape button[aria-label="Закрыть"][aria-disabled="false"], ytcp-button-shape button[aria-label="Close"][aria-disabled="false"]').last
+
+                    # Кликаем через JavaScript (игнорирует CSS visibility)
+                    await close_button.evaluate('element => element.click()')
+                    await asyncio.sleep(random.uniform(1, 2))
+                    logger.info(f"[{profile_name}] ✅ Диалог закрыт")
+                except Exception as e:
+                    logger.warning(f"[{profile_name}] ⚠️ Ошибка закрытия: {e}")
+
                 return True
+
             except Exception as e:
                 logger.error(f"[{profile_name}] ❌ Публикация: {e}")
                 return False
 
         except Exception as e:
             logger.error(f"[{profile_name}] ❌ Ошибка: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     async def upload_session(
@@ -359,23 +407,28 @@ class VideoUploader:
             )
 
             # ТОЧНАЯ КОПИЯ закрытия about:blank из manager.py
-            for page in context.pages:
-                if page.url == 'about:blank':
+            for p in context.pages:
+                if p.url == 'about:blank':
                     _ = asyncio.create_task(
-                        self.close_page_with_delay(page, delay=0.25),
+                        self.close_page_with_delay(p, delay=0.25),
                     )
 
             # Создаем страницу
             page = await context.new_page()
 
-            # Загружаем видео
+            # ОДИН РАЗ переходим в YouTube Studio
+            studio_page = await self.navigate_to_studio(page, profile_name)
+
+            # Загружаем видео (УЖЕ В STUDIO!)
             success_count = 0
 
             for i, video_path in enumerate(videos_to_upload, 1):
-                logger.info(f"\n[{profile_name}] 📤 Видео {i}/{len(videos_to_upload)}")
+                logger.info(f"\n{'=' * 70}")
+                logger.info(f"[{profile_name}] 📤 Видео {i}/{len(videos_to_upload)}")
+                logger.info(f"{'=' * 70}")
 
                 success = await self.upload_video(
-                    page=page,
+                    page=studio_page,  # Используем страницу Studio!
                     video_path=video_path,
                     profile_name=profile_name,
                 )
@@ -383,13 +436,14 @@ class VideoUploader:
                 if success:
                     success_count += 1
 
+                # Пауза перед следующим
                 if i < len(videos_to_upload):
                     pause_sec = random.uniform(pause_minutes[0] * 60, pause_minutes[1] * 60)
                     logger.info(f"[{profile_name}] ⏸️ Пауза {int(pause_sec / 60)} мин...")
                     await asyncio.sleep(pause_sec)
 
             logger.info(f"\n{'=' * 70}")
-            logger.info(f"[{profile_name}] 🎉 Завершено!")
+            logger.info(f"[{profile_name}] 🎉 Сессия завершена!")
             logger.info(f"[{profile_name}] ✅ Загружено: {success_count}/{len(videos_to_upload)}")
             logger.info(f"{'=' * 70}\n")
 
