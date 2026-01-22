@@ -1,65 +1,51 @@
 """
-ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА ВИДЕО
-Запускает каждый профиль в отдельном процессе для загрузки Shorts
+parallel_upload.py
+Параллельная загрузка видео на разные платформы
 """
 
 import asyncio
-import pickle
+import logging
 import time
-from pathlib import Path
 from multiprocessing import Process
 
-import sys
+from automation.uploaders import YouTubeUploader, TikTokUploader, InstagramUploader
 
-sys.path.insert(0, str(Path(__file__).parent))
+# Настраиваем логгер
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(message)s',
+    handlers=[logging.StreamHandler()]
+)
 
-from upload_manager.uploader import VideoUploader
-
-PROFILES_PATH = Path('upload_profiles') / 'profiles.pkl'
-
-
-def load_profiles():
-    """Загрузить профили"""
-    if not PROFILES_PATH.exists():
-        return {}
-    with open(PROFILES_PATH, 'rb') as f:
-        return pickle.load(f)
+logger = logging.getLogger(__name__)
 
 
-def run_upload_in_process(
-        profile_name: str,
-        videos_count: int,
-        pause_minutes: tuple,
-        num: int,
-        total: int,
-        profiles_dir: str
-):
+def run_upload_in_process(uploader_class, profile_name: str, videos_count: int, num: int, total: int, **kwargs):
     """
-    Запустить загрузку в отдельном процессе
+    Запустить загрузку для ОДНОГО профиля в отдельном процессе
 
     Args:
+        uploader_class: класс загрузчика (YouTubeUploader, TikTokUploader, etc)
         profile_name: имя профиля
         videos_count: сколько видео загрузить
-        pause_minutes: пауза между видео (мин, макс)
         num: номер профиля
         total: всего профилей
-        profiles_dir: папка с профилями
+        **kwargs: параметры для upload_video (title, description, etc)
     """
-
     print(f"[{num}/{total}] [{profile_name}] 🚀 Запуск загрузки...")
 
     async def run():
-        uploader = VideoUploader(profiles_dir=profiles_dir)
+        # Создаем uploader в этом процессе
+        uploader = uploader_class()
 
         try:
             await uploader.upload_session(
                 profile_name=profile_name,
                 videos_count=videos_count,
-                pause_minutes=pause_minutes
+                pause_minutes=(2, 3),
+                **kwargs
             )
-
             print(f"[{num}/{total}] [{profile_name}] ✅ Загрузка завершена")
-
         except Exception as e:
             print(f"[{num}/{total}] [{profile_name}] ❌ Ошибка: {e}")
             import traceback
@@ -68,155 +54,161 @@ def run_upload_in_process(
     asyncio.run(run())
 
 
-def run_parallel_upload(
-        num_to_run: int,
-        max_parallel: int,
-        videos_per_profile: int = 3,
-        pause_minutes: tuple = (2, 3),
-        profiles_dir: str = 'upload_profiles'
-):
+def run_parallel_upload(uploader_class, profiles_to_run: list, videos_count: int, max_parallel: int, **kwargs):
     """
-    Параллельная загрузка
+    Запустить загрузку для нескольких профилей параллельно
 
     Args:
-        num_to_run: сколько профилей запустить
-        max_parallel: лимит одновременных
-        videos_per_profile: видео на профиль
-        pause_minutes: пауза между видео (мин, макс)
-        profiles_dir: папка с профилями
+        uploader_class: класс загрузчика
+        profiles_to_run: список имен профилей
+        videos_count: сколько видео на профиль
+        max_parallel: максимум одновременных процессов
+        **kwargs: параметры для upload_video
     """
+    total = len(profiles_to_run)
 
-    profiles_path = Path(profiles_dir) / 'profiles.pkl'
+    if total <= max_parallel:
+        # Запускаем всё сразу
+        print(f"\n✅ Запускаю все {total} профилей параллельно\n")
+        processes = []
 
-    if not profiles_path.exists():
-        print(f"❌ Не найден {profiles_path}")
-        return
-
-    with open(profiles_path, 'rb') as f:
-        profiles = pickle.load(f)
-
-    if not profiles:
-        print(f"❌ Профили не найдены в {profiles_dir}/")
-        return
-
-    profile_names = list(profiles.keys())
-
-    if num_to_run > len(profile_names):
-        num_to_run = len(profile_names)
-
-    to_run = profile_names[:num_to_run]
-
-    print("=" * 70)
-    print("📤 ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА ВИДЕО")
-    print("=" * 70)
-    print(f"📊 Профилей: {num_to_run}")
-    print(f"⚡️ Одновременно: {max_parallel}")
-    print(f"📹 Видео на профиль: {videos_per_profile}")
-    print(f"⏸️ Пауза между видео: {pause_minutes[0]}-{pause_minutes[1]} мин")
-    print(f"📂 Папка профилей: {profiles_dir}/")
-    print("=" * 70)
-
-    # Запускаем батчами
-    total = len(to_run)
-    processes = []
-
-    for i, name in enumerate(to_run, 1):
-        p = Process(
-            target=run_upload_in_process,
-            args=(name, videos_per_profile, pause_minutes, i, total, profiles_dir)
-        )
-        p.start()
-        processes.append(p)
-
-        # Задержка между запусками
-        if i < total:
+        for i, name in enumerate(profiles_to_run, 1):
+            p = Process(
+                target=run_upload_in_process,
+                args=(uploader_class, name, videos_count, i, total),
+                kwargs=kwargs
+            )
+            p.start()
+            processes.append(p)
             time.sleep(3)
 
-        # Ограничение параллельных процессов
-        if len(processes) >= max_parallel:
-            for proc in processes:
-                proc.join()
+        for p in processes:
+            p.join()
+    else:
+        # Запускаем батчами
+        cycles = (total + max_parallel - 1) // max_parallel
+        print(f"\n🔄 Циклов: {cycles}\n")
+
+        for cycle in range(cycles):
+            start_idx = cycle * max_parallel
+            end_idx = min(start_idx + max_parallel, total)
+            batch = profiles_to_run[start_idx:end_idx]
+
+            print(f"\n{'=' * 70}")
+            print(f"🔄 ЦИКЛ {cycle + 1}/{cycles} (профили {start_idx + 1}-{end_idx})")
+            print("=" * 70)
+
             processes = []
+            for i, name in enumerate(batch, start_idx + 1):
+                p = Process(
+                    target=run_upload_in_process,
+                    args=(uploader_class, name, videos_count, i, total),
+                    kwargs=kwargs
+                )
+                p.start()
+                processes.append(p)
+                time.sleep(3)
 
-    # Ждем оставшиеся
-    for p in processes:
-        p.join()
-
-    print("\n" + "=" * 70)
-    print("🎉 ВСЕ ЗАГРУЗКИ ЗАВЕРШЕНЫ!")
-    print("=" * 70)
+            for p in processes:
+                p.join()
 
 
 def main():
     """Главная функция"""
 
     print("=" * 70)
-    print("📤 ЗАГРУЗКА YOUTUBE SHORTS")
+    print("🎬 ПАРАЛЛЕЛЬНАЯ ЗАГРУЗКА ВИДЕО")
     print("=" * 70)
 
-    # Выбор папки
-    print("\n📂 Выберите папку с профилями:")
-    print("   1. upload_profiles/ (начальная заливка)")
-    print("   2. active_profiles/ (активная работа)")
+    # Выбор платформы
+    print("\n📱 ПЛАТФОРМЫ:")
+    print("   1. YouTube Shorts")
+    print("   2. TikTok (скоро)")
+    print("   3. Instagram Reels (скоро)")
 
-    choice = input("\nВыбор (1-2, Enter=1): ").strip() or "1"
+    platform_choice = input("\nВыбери платформу (1-3): ").strip()
 
-    if choice == "2":
-        profiles_dir = "active_profiles"
+    if platform_choice == '1':
+        uploader_class = YouTubeUploader
+        platform_name = "YouTube"
+        profiles_dir = 'upload_profiles'
+    elif platform_choice == '2':
+        uploader_class = TikTokUploader
+        platform_name = "TikTok"
+        profiles_dir = 'upload_profiles'
+    elif platform_choice == '3':
+        uploader_class = InstagramUploader
+        platform_name = "Instagram"
+        profiles_dir = 'upload_profiles'
     else:
-        profiles_dir = "upload_profiles"
-
-    # Загружаем профили
-    profiles_path = Path(profiles_dir) / 'profiles.pkl'
-
-    if not profiles_path.exists():
-        print(f"\n❌ Не найден {profiles_path}")
-        print(f"💡 Перенесите профили в {profiles_dir}/ через move_profile.py")
+        print("❌ Неверный выбор")
         return
 
-    with open(profiles_path, 'rb') as f:
-        profiles = pickle.load(f)
+    # Создаем uploader для проверки профилей
+    uploader = uploader_class(profiles_dir)
 
-    if not profiles:
-        print(f"\n❌ Профили не найдены!")
+    if not uploader.profiles:
+        print(f"\n❌ Профили не найдены в {profiles_dir}/!")
+        print("💡 Перенеси профили: python move_profile.py")
         return
 
-    print(f"\n✅ Найдено: {len(profiles)} профилей в {profiles_dir}/")
-    for i, (name, profile) in enumerate(list(profiles.items())[:10], 1):
-        proxy_info = ""
-        if profile.proxy:
-            proxy_info = f" (прокси: {profile.proxy.server})"
-        print(f"   {i}. {name}{proxy_info}")
+    profile_names = list(uploader.profiles.keys())
 
-    if len(profiles) > 10:
-        print(f"   ... и еще {len(profiles) - 10}")
+    print(f"\n✅ Найдено: {len(profile_names)} профилей в {profiles_dir}/")
+    for i, name in enumerate(profile_names[:10], 1):
+        print(f"   {i}. {name}")
+    if len(profile_names) > 10:
+        print(f"   ... и еще {len(profile_names) - 10}")
 
-    # Проверяем папку videos/
-    videos_dir = Path('videos')
-    if not videos_dir.exists():
-        print(f"\n❌ Папка videos/ не найдена!")
-        print("💡 Создайте папку videos/ и положите туда .mp4 файлы")
-        return
-
-    videos = list(videos_dir.glob('*.mp4'))
+    # Проверка видео
+    videos = uploader.get_video_files()
     if not videos:
-        print(f"\n❌ Нет видео в videos/!")
+        print(f"\n❌ Нет видео в videos/{uploader.platform_name}/!")
+        print(f"💡 Добавь .mp4 файлы в папку videos/{uploader.platform_name}/")
         return
-
-    print(f"\n📹 Найдено видео: {len(videos)}")
 
     try:
-        num = int(input("\nСколько профилей запустить?: "))
-        limit = int(input("Лимит одновременных [10]: ") or "10")
+        # Параметры загрузки
+        num_profiles = int(input("\nСколько профилей запустить?: "))
+        if num_profiles > len(profile_names):
+            num_profiles = len(profile_names)
+
+        max_parallel = int(input("Лимит одновременных [5]: ") or "5")
         videos_count = int(input("Видео на профиль [3]: ") or "3")
 
+        profiles_to_run = profile_names[:num_profiles]
+
+        print("\n" + "=" * 70)
+        print(f"🚀 ЗАПУСК ЗАГРУЗКИ НА {platform_name.upper()}")
+        print("=" * 70)
+        print(f"📊 Профилей: {num_profiles}")
+        print(f"⚡️ Одновременно: {max_parallel}")
+        print(f"📹 Видео на профиль: {videos_count}")
+        print(f"🎬 Всего видео: {num_profiles * videos_count}")
+        print("=" * 70)
+
+        # Параметры для upload_video (можно добавить интерактивный ввод)
+        upload_params = {}
+
+        if platform_choice == '1':  # YouTube
+            use_custom = input("\nИспользовать свои название/описание? (y/n) [n]: ").lower()
+            if use_custom == 'y':
+                upload_params['title'] = input("Название: ")
+                upload_params['description'] = input("Описание: ")
+                upload_params['visibility'] = input("Видимость (public/unlisted/private) [public]: ") or 'public'
+
+        # Запускаем!
         run_parallel_upload(
-            num_to_run=num,
-            max_parallel=limit,
-            videos_per_profile=videos_count,
-            pause_minutes=(2, 3),
-            profiles_dir=profiles_dir
+            uploader_class=uploader_class,
+            profiles_to_run=profiles_to_run,
+            videos_count=videos_count,
+            max_parallel=max_parallel,
+            **upload_params
         )
+
+        print("\n" + "=" * 70)
+        print("🎉 ВСЕ ЗАГРУЗКИ ЗАВЕРШЕНЫ!")
+        print("=" * 70)
 
     except KeyboardInterrupt:
         print("\n\n⚠️ Остановлено")
