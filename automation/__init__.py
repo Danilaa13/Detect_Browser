@@ -4,5 +4,13 @@ automation module
 """
 
 from .uploaders import YouTubeUploader, TikTokUploader, InstagramUploader
+from .warmers import YouTubeWarmer, TikTokWarmer, InstagramWarmer
 
-__all__ = ['YouTubeUploader', 'TikTokUploader', 'InstagramUploader']
+__all__ = [
+    'YouTubeUploader',
+    'TikTokUploader',
+    'InstagramUploader',
+    'YouTubeWarmer',
+    'TikTokWarmer',
+    'InstagramWarmer'
+]
