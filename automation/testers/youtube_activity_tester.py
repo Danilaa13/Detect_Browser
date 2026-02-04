@@ -134,9 +134,9 @@ class YouTubeActivityTester(BaseBrowser):
             await search_input.click()
             await asyncio.sleep(random.uniform(0.3, 0.7))
 
-            # Очищаем поле (если там что-то было)
-            await search_input.press('Control+A')
-            await asyncio.sleep(0.2)
+            # Полностью очищаем поле
+            await search_input.fill('')
+            await asyncio.sleep(0.3)
 
             # Вводим по буквам
             for char in query:
