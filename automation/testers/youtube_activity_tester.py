@@ -111,7 +111,7 @@ class YouTubeActivityTester(BaseBrowser):
 
     async def search_and_open_video(self, page: Page, profile_name: str, query: str) -> bool:
         """
-        Найти видео по запросу и открыть первое
+        Найти видео по запросу и открыть второе (первое обычно реклама)
 
         Args:
             page: страница YouTube
@@ -125,12 +125,12 @@ class YouTubeActivityTester(BaseBrowser):
             logger.info(f"[{profile_name}] 🔍 Ищу: '{query}'")
 
             # Кликаем на поиск
-            search_button = page.locator('button#search-icon-legacy, ytd-searchbox button').first
+            search_button = page.locator('button.ytSearchboxComponentSearchButton[aria-label="Search"]').first
             await search_button.click()
             await asyncio.sleep(random.uniform(0.5, 1))
 
             # Вводим запрос
-            search_input = page.locator('input#search, input[name="search_query"]').first
+            search_input = page.locator('input.ytSearchboxComponentInput[name="search_query"]').first
             await search_input.click()
             await asyncio.sleep(random.uniform(0.3, 0.7))
 
@@ -147,15 +147,15 @@ class YouTubeActivityTester(BaseBrowser):
             await page.keyboard.press('Enter')
             await asyncio.sleep(random.uniform(3, 5))
 
-            logger.info(f"[{profile_name}] 🎯 Открываю первое видео...")
+            logger.info(f"[{profile_name}] 🎯 Открываю второе видео (пропускаю рекламу)...")
 
             # Ждем загрузки результатов
             await asyncio.sleep(2)
 
-            # Кликаем на первое видео (НЕ Shorts, НЕ реклама)
+            # Кликаем на второе видео (первое часто реклама)
             video_selector = 'ytd-video-renderer a#video-title, ytd-video-renderer h3 a'
-            first_video = page.locator(video_selector).first
-            await first_video.click()
+            second_video = page.locator(video_selector).nth(1)
+            await second_video.click()
             await asyncio.sleep(random.uniform(4, 6))
 
             logger.info(f"[{profile_name}] ✅ Видео открыто!")
@@ -197,8 +197,8 @@ class YouTubeActivityTester(BaseBrowser):
 
             await asyncio.sleep(random.uniform(1, 2))
 
-            # Нажимаем кнопку "Оставить комментарий"
-            submit_button = page.locator('button#submit-button[aria-label*="Comment"], button#submit-button:has-text("Comment")').first
+            # Нажимаем кнопку "Comment"
+            submit_button = page.locator('button.yt-spec-button-shape-next[aria-label="Comment"]').first
             await submit_button.click(timeout=3000)
             await asyncio.sleep(random.uniform(2, 3))
 
